@@ -1,0 +1,199 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import spectrogram, welch
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
+from skimage.measure import regionprops, label
+
+def load_iq_data(filepaths, dtype=np.float32):
+    data = []
+    for filepath in filepaths:
+        iq_data_interleaved = np.fromfile(filepath, dtype=dtype)
+        I_data = iq_data_interleaved[0::2]
+        Q_data = iq_data_interleaved[1::2]
+        IQ_data = I_data + 1j * Q_data
+        data.extend(IQ_data)
+    return np.array(data)
+
+def compute_spectrogram(data, fs, nperseg=512, noverlap=0):
+    f, t, Sxx = spectrogram(data, fs=fs, window='hann', nperseg=nperseg, noverlap=noverlap, nfft=nperseg)
+    return f, t, 10 * np.log10(Sxx)
+
+def extract_features(data, fs):
+    abs_data = np.abs(data)
+    mean = np.mean(abs_data)
+    std = np.std(abs_data)
+    rms = np.sqrt(np.mean(abs_data**2))
+    peak = np.max(abs_data)
+    crest_factor = peak / rms
+    
+    f, psd = welch(data, fs, nperseg=512, noverlap=0)
+    peak_freq = f[np.argmax(psd)]
+    centroid = np.sum(f * psd) / np.sum(psd)
+    bandwidth = np.sqrt(np.sum(((f - centroid)**2) * psd) / np.sum(psd))
+    
+    f, t, Sxx = compute_spectrogram(data, fs)
+    spec_mean = np.mean(Sxx)
+    spec_std = np.std(Sxx)
+    spec_max = np.max(Sxx)
+    spec_energy = np.sum(Sxx)
+    
+    power_intensity = np.sum(np.abs(data)**2) / len(data)
+    energy_intensity = np.sum(np.abs(data)**2)
+    
+    threshold = np.mean(Sxx) + 2 * np.std(Sxx)
+    binary = Sxx > threshold
+    labeled = label(binary)
+    regions = regionprops(labeled)
+    
+    if len(regions) == 0:
+        total_area, num_regions, max_area, mean_aspect_ratio, mean_eccentricity = 0, 0, 0, 0, 0
+    else:
+        areas = [r.area for r in regions]
+        aspect_ratios = [r.major_axis_length / r.minor_axis_length if r.minor_axis_length != 0 else 0 for r in regions]
+        eccentricities = [r.eccentricity for r in regions]
+        
+        total_area = np.sum(areas)
+        num_regions = len(regions)
+        max_area = np.max(areas)
+        mean_aspect_ratio = np.mean(aspect_ratios)
+        mean_eccentricity = np.mean(eccentricities)
+    
+    return np.array([mean, std, rms, peak, crest_factor, peak_freq, centroid, bandwidth, 
+                     spec_mean, spec_std, spec_max, spec_energy, power_intensity, energy_intensity,
+                     total_area, num_regions, max_area, mean_aspect_ratio, mean_eccentricity])
+
+def load_and_extract_features(filepaths, fs):
+    features = []
+    for filepath in filepaths:
+        data = load_iq_data([filepath])
+        feature = extract_features(data, fs)
+        features.append(feature)
+    return np.array(features)
+
+# Define parameters
+fs = 50e6
+
+# Define file paths (update these with your actual file paths)
+drone1_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d1-c2/data_{}.dat".format(i) for i in range(13)]
+drone2_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d2-c2/data_{}.dat".format(i) for i in range(13)]
+drone3_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d3-c2/data_{}.dat".format(i) for i in range(13)]
+drone4_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d4-c2/data_{}.dat".format(i) for i in range(13)]
+
+controller_filepaths = [
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_1.dat", 
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_2.dat", 
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_3.dat",
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_4.dat",
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_5.dat", 
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_6.dat", 
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_7.dat",
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_8.dat",
+]
+
+# Load and extract features
+drone1_features = load_and_extract_features(drone1_filepaths, fs)
+drone2_features = load_and_extract_features(drone2_filepaths, fs)
+drone3_features = load_and_extract_features(drone3_filepaths, fs)
+drone4_features = load_and_extract_features(drone4_filepaths, fs)
+controller_features = load_and_extract_features(controller_filepaths, fs)
+
+# Combine features for Step 1: Drones vs Controllers
+drone_features = np.vstack((drone1_features, drone2_features, drone3_features, drone4_features))
+X_step1 = np.vstack((drone_features, controller_features))
+
+# Standardize features
+scaler_step1 = StandardScaler()
+X_scaled_step1 = scaler_step1.fit_transform(X_step1)
+
+# Use PCA to reduce dimensionality
+pca = PCA(n_components=10)
+X_pca_step1 = pca.fit_transform(X_scaled_step1)
+
+# K-means clustering for Step 1
+kmeans_step1 = KMeans(n_clusters=2, random_state=42, n_init=10)
+labels_step1 = kmeans_step1.fit_predict(X_pca_step1)
+
+drone_cluster = np.argmax([np.sum(labels_step1[:len(drone_features)] == i) for i in range(2)])
+controller_cluster = 1 - drone_cluster
+
+print(f"Cluster {drone_cluster} corresponds to drones")
+print(f"Cluster {controller_cluster} corresponds to controllers")
+
+# Combine features for Step 2: Differentiate between drones
+X_step2 = np.vstack((drone1_features, drone2_features, drone3_features, drone4_features))
+
+# Standardize features
+scaler_step2 = StandardScaler()
+X_scaled_step2 = scaler_step2.fit_transform(X_step2)
+
+# Use PCA to reduce dimensionality
+X_pca_step2 = pca.fit_transform(X_scaled_step2)
+
+# K-means clustering for Step 2
+kmeans_step2 = KMeans(n_clusters=4, random_state=42, n_init=10)
+labels_step2 = kmeans_step2.fit_predict(X_pca_step2)
+
+drone_clusters = [np.argmax([np.sum(labels_step2[i*len(drone1_features):(i+1)*len(drone1_features)] == j) for j in range(4)]) for i in range(4)]
+
+for i, cluster in enumerate(drone_clusters):
+    print(f"Cluster {cluster} corresponds to Drone {i+1}")
+
+def classify_device(data, fs, scaler_step1, kmeans_step1, scaler_step2, kmeans_step2, drone_cluster, drone_clusters):
+    features = extract_features(data, fs)
+    
+    # Step 1: Drone vs Controller
+    features_scaled_step1 = scaler_step1.transform(features.reshape(1, -1))
+    features_pca_step1 = pca.transform(features_scaled_step1)
+    cluster_step1 = kmeans_step1.predict(features_pca_step1)[0]
+    
+    if cluster_step1 == controller_cluster:
+        return "Controller"
+    
+    # Step 2: Differentiate between Drones
+    features_scaled_step2 = scaler_step2.transform(features.reshape(1, -1))
+    features_pca_step2 = pca.transform(features_scaled_step2)
+    cluster_step2 = kmeans_step2.predict(features_pca_step2)[0]
+    
+    for i, cluster in enumerate(drone_clusters):
+        if cluster_step2 == cluster:
+            return f"Drone {i+1}"
+    
+    return "Unknown Drone"
+
+# Example classification of new spectrograms
+new_filepaths = [
+    "/data2/ideht/2024-07-11_OneDrone/d1-c2/data_15.dat",
+    "/data2/ideht/2024-07-11_OneDrone/d2-c2/data_15.dat",
+    "/data2/ideht/2024-07-11_OneDrone/d3-c2/data_15.dat",
+    "/data2/ideht/2024-07-11_OneDrone/d4-c2/data_15.dat",
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_10 .dat"
+]
+
+for filepath in new_filepaths:
+    new_data = load_iq_data([filepath])
+    classification = classify_device(new_data, fs, scaler_step1, kmeans_step1, scaler_step2, kmeans_step2, drone_cluster, drone_clusters)
+    print(f"\nThe file {filepath} is classified as: {classification}")
+
+# Visualize feature importance for both steps
+def plot_feature_importance(kmeans, feature_names, title):
+    cluster_centers = kmeans.cluster_centers_
+    feature_importance = np.max(np.abs(cluster_centers - np.mean(cluster_centers, axis=0)), axis=0)
+
+    plt.figure(figsize=(12, 6))
+    plt.bar(feature_names, feature_importance)
+    plt.title(title)
+    plt.xlabel('Features')
+    plt.ylabel('Maximum Absolute Difference from Mean')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+feature_names = ['mean', 'std', 'rms', 'peak', 'crest_factor', 'peak_freq', 'centroid', 'bandwidth', 
+                 'spec_mean', 'spec_std', 'spec_max', 'spec_energy', 'power_intensity', 'energy_intensity',
+                 'total_area', 'num_regions', 'max_area', 'mean_aspect_ratio', 'mean_eccentricity']
+
+plot_feature_importance(kmeans_step1, feature_names, 'Feature Importance: Drones vs Controllers')
+plot_feature_importance(kmeans_step2, feature_names, 'Feature Importance: Drone 1 vs Drone 2')
