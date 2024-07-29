@@ -3,8 +3,6 @@ import matplotlib.pyplot as plt
 from scipy.signal import spectrogram, welch
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score
 from skimage.measure import regionprops, label
 
 def load_iq_data(filepaths, dtype=np.float32):
@@ -77,10 +75,10 @@ def load_and_extract_features(filepaths, fs):
 fs = 50e6
 
 # Define file paths (update these with your actual file paths)
-drone1_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d1-c2/data_{}.dat".format(i) for i in range(13)]
-drone2_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d2-c2/data_{}.dat".format(i) for i in range(13)]
-drone3_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d3-c2/data_{}.dat".format(i) for i in range(13)]
-drone4_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d4-c2/data_{}.dat".format(i) for i in range(13)]
+drone1_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d1-c3/data_{}.dat".format(i) for i in range(10)]
+drone2_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d2-c3/data_{}.dat".format(i) for i in range(10)]
+drone3_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d3-c3/data_{}.dat".format(i) for i in range(10)]
+drone4_filepaths = ["/data2/ideht/2024-07-11_OneDrone/d4-c3/data_{}.dat".format(i) for i in range(10)]
 
 controller_filepaths = [
     "/data2/ideht/2024-07-09_Controllers/position1/0001/data_1.dat", 
@@ -108,13 +106,9 @@ X_step1 = np.vstack((drone_features, controller_features))
 scaler_step1 = StandardScaler()
 X_scaled_step1 = scaler_step1.fit_transform(X_step1)
 
-# Use PCA to reduce dimensionality
-pca = PCA(n_components=10)
-X_pca_step1 = pca.fit_transform(X_scaled_step1)
-
 # K-means clustering for Step 1
 kmeans_step1 = KMeans(n_clusters=2, random_state=42, n_init=10)
-labels_step1 = kmeans_step1.fit_predict(X_pca_step1)
+labels_step1 = kmeans_step1.fit_predict(X_scaled_step1)
 
 drone_cluster = np.argmax([np.sum(labels_step1[:len(drone_features)] == i) for i in range(2)])
 controller_cluster = 1 - drone_cluster
@@ -129,12 +123,9 @@ X_step2 = np.vstack((drone1_features, drone2_features, drone3_features, drone4_f
 scaler_step2 = StandardScaler()
 X_scaled_step2 = scaler_step2.fit_transform(X_step2)
 
-# Use PCA to reduce dimensionality
-X_pca_step2 = pca.fit_transform(X_scaled_step2)
-
 # K-means clustering for Step 2
 kmeans_step2 = KMeans(n_clusters=4, random_state=42, n_init=10)
-labels_step2 = kmeans_step2.fit_predict(X_pca_step2)
+labels_step2 = kmeans_step2.fit_predict(X_scaled_step2)
 
 drone_clusters = [np.argmax([np.sum(labels_step2[i*len(drone1_features):(i+1)*len(drone1_features)] == j) for j in range(4)]) for i in range(4)]
 
@@ -146,16 +137,14 @@ def classify_device(data, fs, scaler_step1, kmeans_step1, scaler_step2, kmeans_s
     
     # Step 1: Drone vs Controller
     features_scaled_step1 = scaler_step1.transform(features.reshape(1, -1))
-    features_pca_step1 = pca.transform(features_scaled_step1)
-    cluster_step1 = kmeans_step1.predict(features_pca_step1)[0]
+    cluster_step1 = kmeans_step1.predict(features_scaled_step1)[0]
     
     if cluster_step1 == controller_cluster:
         return "Controller"
     
     # Step 2: Differentiate between Drones
     features_scaled_step2 = scaler_step2.transform(features.reshape(1, -1))
-    features_pca_step2 = pca.transform(features_scaled_step2)
-    cluster_step2 = kmeans_step2.predict(features_pca_step2)[0]
+    cluster_step2 = kmeans_step2.predict(features_scaled_step2)[0]
     
     for i, cluster in enumerate(drone_clusters):
         if cluster_step2 == cluster:
@@ -165,11 +154,11 @@ def classify_device(data, fs, scaler_step1, kmeans_step1, scaler_step2, kmeans_s
 
 # Example classification of new spectrograms
 new_filepaths = [
-    "/data2/ideht/2024-07-11_OneDrone/d1-c2/data_15.dat",
-    "/data2/ideht/2024-07-11_OneDrone/d2-c2/data_15.dat",
-    "/data2/ideht/2024-07-11_OneDrone/d3-c2/data_15.dat",
-    "/data2/ideht/2024-07-11_OneDrone/d4-c2/data_15.dat",
-    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_10 .dat"
+    "/data2/ideht/2024-07-11_OneDrone/d1-c3/data_15.dat",
+    "/data2/ideht/2024-07-11_OneDrone/d2-c3/data_15.dat",
+    "/data2/ideht/2024-07-11_OneDrone/d3-c3/data_15.dat",
+    "/data2/ideht/2024-07-11_OneDrone/d4-c3/data_15.dat",
+    "/data2/ideht/2024-07-09_Controllers/position1/0001/data_10.dat"
 ]
 
 for filepath in new_filepaths:
@@ -197,3 +186,24 @@ feature_names = ['mean', 'std', 'rms', 'peak', 'crest_factor', 'peak_freq', 'cen
 
 plot_feature_importance(kmeans_step1, feature_names, 'Feature Importance: Drones vs Controllers')
 plot_feature_importance(kmeans_step2, feature_names, 'Feature Importance: Drone 1 vs Drone 2')
+
+# After loading and extracting features for all drones
+drone_features_list = [drone1_features, drone2_features, drone3_features, drone4_features]
+
+# Calculate mean features for each drone
+mean_features = [np.mean(drone_features, axis=0) for drone_features in drone_features_list]
+
+# Create a pandas DataFrame for easier visualization
+import pandas as pd
+
+feature_names = ['Mean', 'Std', 'RMS', 'Peak', 'Crest Factor', 'Peak Freq', 'Centroid', 'Bandwidth',
+                 'Spec Mean', 'Spec Std', 'Spec Max', 'Spec Energy', 'Power Intensity', 'Energy Intensity',
+                 'Total Area', 'Num Regions', 'Max Area', 'Mean Aspect Ratio', 'Mean Eccentricity']
+
+df = pd.DataFrame(mean_features, columns=feature_names, index=['Drone 1', 'Drone 2', 'Drone 3', 'Drone 4'])
+
+# Display the table
+print(df.to_string())
+
+# Optionally, save to a CSV file
+df.to_csv('drone_features_summary.csv')
